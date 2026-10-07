@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Teams Caption Translator",
+  "version": "0.1.0",
+  "description": "Captura legendas do Teams, traduz localmente no Chrome e salva transcrições com um host Python.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApBLc5FlewvsjL+h1jNYrUrd7HZVaIFLMrm6a5/DEuU7EsUg6dgQfQozuL45mAwaX3e9S4UJWaapFOTEFtAZm4iaCUsT502y0dZdaa4zrN69dWY1f3erRB1jZeq+cpKpE8M/z2V3rUmJkOL1KqUq4ZEmm4GHcocXD8a/Id4PD7AzQbZZz1ao+2tN3FTqlvA4lTYTk96FwVtEQYaTojbJDkZFJDuIFpwkw8wzvdLub1sGo/Q5Hgft0OGFbdIhSjQFTh21nPdXK2B68E0qiHcNagECU3/OP7VmDxfp4viujLBLIXPy1I4IICNLQ59aBzFtaf6QlEpGZHwmOZ+DzYYo6tQIDAQAB",
+  "permissions": ["nativeMessaging", "storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Legendas do Teams" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://teams.live.com/*"
+      ],
+      "js": ["page.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://teams.microsoft.com/*",
+        "https://teams.cloud.microsoft/*",
+        "https://teams.live.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+#
+# Native messaging host of the ciel.legendas Chrome extension
+# (chrome/ciel-legendas). Chrome starts it when a Teams tab begins showing
+# captions and closes stdin when the captions, the meeting or Chrome go away.
+#
+#   $XDG_RUNTIME_DIR/ciel/legendas/live.json                 the last lines, for the notch
+#   ${XDG_STATE_HOME:-~/.local/state}/ciel/legendas/<s>.json  the whole meeting, for the panel
+#   ${XDG_STATE_HOME:-~/.local/state}/ciel/legendas/<s>.md    the same, to copy or open
+#
+# The switch in the shell's settings (ciel.legendas owns it) is
+# legendas-settings.json next to that folder: while it says
+# `"enabled": false` nothing is written and the lines are dropped, not kept
+# for later. A missing or broken file means on.
+#
+# Every file is written to a hidden tmp and renamed over, so the shell never
+# reads half of one. With CIEL_SANDBOX set the runtime dir gets the sandbox's
+# name, the same rule as the plugin. Registered by ciel-legendas-install.
+
+import json
+import os
+import re
+import struct
+import sys
+import time
+from datetime import datetime
+
+LIVE_LINES = 3
+SESSION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
+LINE_KEYS = ("id", "speaker", "text", "translation", "t")
+
+
+def runtime_dir():
+    base = os.environ.get("XDG_RUNTIME_DIR") or (
+        os.path.join(os.path.expanduser("~"), "Library", "Caches")
+        if sys.platform == "darwin" else f"/run/user/{os.getuid()}"
+    )
+    sandbox = os.environ.get("CIEL_SANDBOX", "")
+    return os.path.join(base, "ciel" + (f"-{sandbox}" if sandbox else ""), "legendas")
+
+
+def state_dir():
+    base = os.environ.get("XDG_STATE_HOME") or (
+        os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+        if sys.platform == "darwin" else os.path.join(os.path.expanduser("~"), ".local", "state")
+    )
+    return os.path.join(base, "ciel", "legendas")
+
+
+class Switch:
+    def __init__(self):
+        self.path = os.path.join(os.path.dirname(state_dir()), "legendas-settings.json")
+        self.stamp = None
+        self.on = True
+
+    def enabled(self):
+        try:
+            stamp = os.stat(self.path).st_mtime_ns
+        except OSError:
+            stamp = None
+        if stamp != self.stamp:
+            self.stamp = stamp
+            try:
+                with open(self.path, encoding="utf-8") as f:
+                    self.on = json.load(f).get("enabled", True) is not False
+            except (OSError, ValueError, AttributeError):
+                self.on = True
+        return self.on
+
+
+def write_atomic(path, text):
+    folder, name = os.path.split(path)
+    os.makedirs(folder, exist_ok=True)
+    tmp = os.path.join(folder, f".{name}.tmp.{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def read_message(stream):
+    head = stream.read(4)
+    if len(head) < 4:
+        return None
+    (size,) = struct.unpack("=I", head)
+    body = stream.read(size)
+    if len(body) < size:
+        return None
+    return json.loads(body)
+
+
+def send_message(obj):
+    data = json.dumps(obj).encode()
+    sys.stdout.buffer.write(struct.pack("=I", len(data)) + data)
+    sys.stdout.buffer.flush()
+
+
+def now_ms():
+    return int(time.time() * 1000)
+
+
+def clock(ms, fmt):
+    return datetime.fromtimestamp(ms / 1000).strftime(fmt)
+
+
+class Meeting:
+    def __init__(self):
+        self.id = None
+        self.meeting = ""
+        self.source = ""
+        self.target = "pt"
+        self.translator = "off"
+        self.started = 0
+        self.lines = {}
+        self.active = False
+        self.wrote = False
+        self.switch = Switch()
+        self.live_path = os.path.join(runtime_dir(), "live.json")
+
+    def path(self, ext):
+        return os.path.join(state_dir(), f"{self.id}.{ext}")
+
+    def start(self, msg):
+        sid = str(msg.get("session") or "")
+        if not SESSION_RE.match(sid):
+            sid = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        if sid != self.id:
+            self.id = sid
+            self.lines = {}
+            self.started = int(msg.get("started") or now_ms())
+            self.resume()
+        self.meeting = str(msg.get("meeting") or self.meeting)
+        self.source = str(msg.get("source") or self.source)
+        self.target = str(msg.get("target") or self.target)
+        self.translator = str(msg.get("translator") or self.translator)
+        if self.switch.enabled():
+            self.active = True
+            self.write_live()
+
+    def resume(self):
+        try:
+            with open(self.path("json"), encoding="utf-8") as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return
+        self.started = int(saved.get("started") or self.started)
+        for line in saved.get("lines", []):
+            if line.get("id"):
+                self.lines[line["id"]] = {**line, "final": True}
+
+    def status(self, msg):
+        self.translator = str(msg.get("translator") or self.translator)
+        if self.active:
+            self.write_live()
+
+    def line(self, msg):
+        lid = str(msg.get("id") or "")
+        if not lid or self.id is None:
+            return
+        if not self.switch.enabled():
+            if self.active:
+                self.active = False
+                self.write_live()
+            return
+        self.active = True
+        cur = self.lines.get(lid, {"id": lid, "t": int(msg.get("t") or now_ms())})
+        before = (cur.get("text"), cur.get("translation"), cur.get("final"))
+        cur["speaker"] = str(msg.get("speaker") or cur.get("speaker") or "")
+        cur["text"] = str(msg.get("text") or "")
+        cur["translation"] = str(msg.get("translation") or "")
+        cur["final"] = bool(msg.get("final"))
+        self.lines[lid] = cur
+        self.write_live()
+        if cur["final"] and before != (cur["text"], cur["translation"], True):
+            self.save()
+
+    def stop(self):
+        if self.id is None:
+            return
+        for line in self.lines.values():
+            line["final"] = True
+        self.active = False
+        if self.lines:
+            self.save()
+        if self.wrote:
+            self.write_live()
+
+    def write_live(self):
+        self.wrote = True
+        lines = list(self.lines.values())[-LIVE_LINES:]
+        write_atomic(self.live_path, json.dumps({
+            "v": 1,
+            "active": self.active,
+            "session": self.id,
+            "meeting": self.meeting,
+            "source": self.source,
+            "target": self.target,
+            "translator": self.translator,
+            "updated": now_ms(),
+            "transcript": self.path("md"),
+            "lines": [{**{k: line.get(k, "") for k in LINE_KEYS}, "final": line.get("final", False)} for line in lines],
+        }, ensure_ascii=False))
+
+    def save(self):
+        done = [line for line in self.lines.values() if line.get("final") and line.get("text")]
+        write_atomic(self.path("json"), json.dumps({
+            "v": 1,
+            "session": self.id,
+            "meeting": self.meeting,
+            "source": self.source,
+            "target": self.target,
+            "started": self.started,
+            "lines": [{k: line.get(k, "") for k in LINE_KEYS} for line in done],
+        }, ensure_ascii=False))
+        out = [f"# {self.meeting or 'Reunião'}", f"{clock(self.started, '%d/%m/%Y %H:%M')} · {self.source} → {self.target}", ""]
+        for line in done:
+            out.append(f"**{line.get('speaker') or '?'}** · {clock(line['t'], '%H:%M:%S')}")
+            out.append(line["text"])
+            if line.get("translation"):
+                out.append(f"> {line['translation']}")
+            out.append("")
+        write_atomic(self.path("md"), "\n".join(out))
+
+
+def main():
+    meeting = Meeting()
+    stdin = sys.stdin.buffer
+    while True:
+        try:
+            msg = read_message(stdin)
+        except ValueError as e:
+            print(f"ciel-legendas-host: bad message: {e}", file=sys.stderr)
+            continue
+        if msg is None:
+            break
+        kind = msg.get("type")
+        try:
+            if kind == "ping":
+                send_message({"type": "pong", "v": 1})
+            elif kind == "start":
+                meeting.start(msg)
+            elif kind == "status":
+                meeting.status(msg)
+            elif kind == "line":
+                meeting.line(msg)
+            elif kind == "stop":
+                meeting.stop()
+        except OSError as e:
+            print(f"ciel-legendas-host: {e}", file=sys.stderr)
+    meeting.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; --muted: #6b6b6b; --ok: #2e7d32; --bad: #c62828; }
+  @media (prefers-color-scheme: dark) { :root { --muted: #a0a0a0; --ok: #81c784; --bad: #ef9a9a; } }
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 0; padding: 14px; width: 280px; }
+  h1 { font-size: 14px; margin: 0 0 12px; }
+  label { display: block; color: var(--muted); margin-bottom: 4px; }
+  select { font: inherit; width: 100%; padding: 6px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 14px 0 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  .ok { color: var(--ok); }
+  .bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<h1>Legendas do Teams → português</h1>
+<label for="source">Idioma falado na reunião</label>
+<select id="source">
+  <option value="en">Inglês</option>
+  <option value="es">Espanhol</option>
+  <option value="fr">Francês</option>
+  <option value="de">Alemão</option>
+  <option value="it">Italiano</option>
+  <option value="nl">Holandês</option>
+  <option value="pl">Polonês</option>
+  <option value="ru">Russo</option>
+  <option value="uk">Ucraniano</option>
+  <option value="tr">Turco</option>
+  <option value="ar">Árabe</option>
+  <option value="hi">Hindi</option>
+  <option value="ja">Japonês</option>
+  <option value="ko">Coreano</option>
+  <option value="zh">Chinês</option>
+</select>
+<dl>
+  <dt>Tradutor</dt><dd id="translator">…</dd>
+  <dt>Host local</dt><dd id="host">…</dd>
+</dl>
+<script src="popup.js"></script>
+</body>
+</html>

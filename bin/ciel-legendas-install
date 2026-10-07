@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Register the native host using absolute paths, on Linux or macOS."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import sys
+
+NAME = "ciel.legendas"
+ID = "mnahiiepnlmgngcjlhdfilnmjlnanolp"
+
+
+def browser_dirs():
+    home = Path.home()
+    if sys.platform == "darwin":
+        base = home / "Library" / "Application Support"
+        return [base / "Google" / "Chrome", base / "Chromium"]
+    base = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+    return [base / name for name in (
+        "google-chrome", "google-chrome-beta", "google-chrome-unstable", "chromium"
+    )]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--uninstall", action="store_true")
+    parser.add_argument("--browser-dir", type=Path, help="Override browser user data directory")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    dirs = [args.browser_dir.expanduser().resolve()] if args.browser_dir else browser_dirs()
+    dirs = [d for d in dirs if d.is_dir()]
+    if not dirs:
+        parser.error("Abra o Chrome uma vez ou informe --browser-dir CAMINHO")
+    for directory in dirs:
+        folder = directory / "NativeMessagingHosts"
+        manifest = folder / f"{NAME}.json"
+        launcher = folder / f"{NAME}-launcher"
+        if args.uninstall:
+            manifest.unlink(missing_ok=True)
+            launcher.unlink(missing_ok=True)
+            print(f"Removido: {manifest}")
+            continue
+        folder.mkdir(parents=True, exist_ok=True)
+        # Chrome's PATH may omit Homebrew; capture the interpreter used to install.
+        launcher.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable)
+                            + " " + shlex.quote(str(root / "bin" / "ciel-legendas-host"))
+                            + ' "$@"\n', encoding="utf-8")
+        launcher.chmod(0o700)
+        manifest.write_text(json.dumps({
+            "name": NAME,
+            "description": "Teams Caption Translator: local transcripts",
+            "path": str(launcher),
+            "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{ID}/"],
+        }, indent=2) + "\n", encoding="utf-8")
+        print(f"Registrado: {manifest}")
+    if not args.uninstall:
+        print("chrome://extensions → Modo do desenvolvedor → Carregar sem compactação")
+        print(root / "chrome" / "ciel-legendas")
+
+
+if __name__ == "__main__":
+    main()
